@@ -18,6 +18,9 @@ const WHATSAPP_TOKEN = "EAAulga8v3IwBQy6DvWZBxb6K23b91E4uyN80wZAjY9WLDxeAGPjEhTZ
 // Phone Number ID de tu número real
 const PHONE_NUMBER_ID = "1738389286736343";
 
+// Número de tu WhatsApp real (sin el +)
+const ADMIN_NUMBER = "57317111596";
+
 // ----------------- Manejo de usuarios en flujo de pedido -----------------
 const userSessions = {}; // para manejar estado del pedido
 
@@ -100,13 +103,24 @@ function handleOrderStep(user, text) {
     } else if (session.step === "product") {
         session.order.product = text;
 
-        // Pedido completo
+        // Confirmación al cliente
         sendText(user, `✅ Gracias por tu pedido! Aquí están los datos:\n\nNombre: ${session.order.name}\nDirección: ${session.order.address}\nProducto: ${session.order.product}\n\nNos pondremos en contacto pronto!`);
 
-        // Guardar pedido en consola
-        console.log("Nuevo pedido:", session.order);
+        // Enviar pedido directo a tu WhatsApp
+        const pedidoMensaje = `📦 Nuevo pedido recibido:\n\nNombre: ${session.order.name}\nDirección: ${session.order.address}\nProducto: ${session.order.product}`;
 
-        // Limpiar sesión
+        axios.post(`https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/messages`, {
+            messaging_product: "whatsapp",
+            to: ADMIN_NUMBER,
+            text: { body: pedidoMensaje }
+        }, {
+            headers: {
+                'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        // Limpiar sesión del usuario
         delete userSessions[user];
     }
 }
