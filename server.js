@@ -1,182 +1,68 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const path = require('path');
-const axios = require('axios');
+const { Client, LocalAuth } = require('whatsapp-web.js');
+const qrcode = require('qrcode-terminal');
 
-const app = express();
-app.use(bodyParser.json());
-
-// Servir archivos estáticos (PDF)
-app.use('/public', express.static(path.join(__dirname, 'public')));
-
-// Token de verificación del webhook
-const VERIFY_TOKEN = "charlieteria_token";
-
-// Token de acceso de WhatsApp Cloud API
-const WHATSAPP_TOKEN = "EAAulga8v3IwBQy6DvWZBxb6K23b91E4uyN80wZAjY9WLDxeAGPjEhTZCFUQx0gTl75oeqU18PWWZCMWWovVMXJpyJST9Szgc537inl2H8oz2MnJo3kPb0ZB5kg8ssiTUaR9DSWye9tlJ4hwMmdsiZClKEx2WQIsSktbG0QW9Vk0P0lL9s0VsfrCoZB4xakA4h7GxWk9wui4S2EKegHaKzjAGKyRgZBFtBDgX0nqG6zm0avWwacZBaHZBWihnGDXXZBvRlT4ADYExRg9pLmQ6WYsZAHVURAZDZD";
-
-// Phone Number ID de tu número real
-const PHONE_NUMBER_ID = "1115001361687440";
-
-// Número de tu WhatsApp real (sin el +)
-const ADMIN_NUMBER = "57317111596";
-
-// ----------------- Manejo de usuarios en flujo de pedido -----------------
-const userSessions = {}; // para manejar estado del pedido
-
-// ----------------- WEBHOOK GET (verificación) -----------------
-app.get('/webhook', (req, res) => {
-    const mode = req.query['hub.mode'];
-    const token = req.query['hub.verify_token'];
-    const challenge = req.query['hub.challenge'];
-
-    if (mode && token) {
-        if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-            console.log('Webhook verificado!');
-            res.status(200).send(challenge);
-        } else {
-            res.sendStatus(403);
-        }
-    }
+const client = new Client({
+    authStrategy: new LocalAuth()
 });
 
-// ----------------- WEBHOOK POST (recibir mensajes) -----------------
-app.post('/webhook', (req, res) => {
-    const body = req.body;
-    res.sendStatus(200); // Confirmar recepción
-
-    if (body.object) {
-        body.entry.forEach(entry => {
-            const changes = entry.changes;
-            changes.forEach(change => {
-                if (change.value.messages) {
-                    const message = change.value.messages[0];
-                    const from = message.from;
-                    const text = message.text ? message.text.body : "";
-
-                    handleMessage(from, text);
-                }
-            });
-        });
-    }
+client.on('qr', qr => {
+    console.log('Escanea este QR con tu WhatsApp:');
+    qrcode.generate(qr, {small: true});
 });
 
-// ----------------- FUNCIONES DEL BOT -----------------
-function handleMessage(from, text) {
-    // Si el usuario está en flujo de pedido
-    if (userSessions[from] && userSessions[from].step) {
-        handleOrderStep(from, text);
-        return;
+client.on('ready', () => {
+    console.log('Bot listo 🚀');
+});
+
+client.on('message', async message => {
+
+    const msg = message.body.toLowerCase();
+
+    if(msg === "hola" || msg === "menu" || msg === "menú"){
+        client.sendMessage(message.from,
+`🍖 Bienvenido a La Charlietería
+
+1️⃣ Ver menú
+2️⃣ Ver catálogo
+3️⃣ Hacer pedido
+4️⃣ Hablar con asesor`);
     }
 
-    // Opciones del menú
-    if (text === "1") {
-        sendText(from, "🍽️ Aquí está nuestro menú:\n\n- Parrilla Mixta\n- Chorizos Artesanales\n- Arepas de Carne\n- Bebidas Naturales\n\nEscribe el número de la opción que quieras.");
-    } else if (text === "2") {
-        sendPdf(from);
-    } else if (text === "3") {
-        startOrder(from);
-    } else if (text === "4") {
-        sendText(from, "Un asesor se pondrá en contacto contigo pronto 😊");
-    } else {
-        sendMenu(from);
+    if(msg === "1"){
+        client.sendMessage(message.from,
+`🍽 Nuestro menú
+
+🥩 Choripán
+🍖 Chorizo artesanal
+🍔 Hamburguesas
+
+Escribe 3 para hacer tu pedido.`);
     }
-}
 
-// ----------------- Flujo de pedido -----------------
-function startOrder(user) {
-    userSessions[user] = { step: "name", order: {} };
-    sendText(user, "¡Perfecto! Vamos a hacer tu pedido.\n\nPor favor escribe tu *Nombre*:");
-}
+    if(msg === "2"){
+        client.sendMessage(message.from,
+`📄 Aquí puedes ver nuestro catálogo
 
-function handleOrderStep(user, text) {
-    const session = userSessions[user];
-
-    if (session.step === "name") {
-        session.order.name = text;
-        session.step = "address";
-        sendText(user, "Ahora escribe tu *Dirección*:");
-    } else if (session.step === "address") {
-        session.order.address = text;
-        session.step = "product";
-        sendText(user, "Por último, escribe el *Producto* que deseas:");
-    } else if (session.step === "product") {
-        session.order.product = text;
-
-        // Confirmación al cliente
-        sendText(user, `✅ Gracias por tu pedido! Aquí están los datos:\n\nNombre: ${session.order.name}\nDirección: ${session.order.address}\nProducto: ${session.order.product}\n\nNos pondremos en contacto pronto!`);
-
-        // Enviar pedido directo a tu WhatsApp
-        const pedidoMensaje = `📦 Nuevo pedido recibido:\n\nNombre: ${session.order.name}\nDirección: ${session.order.address}\nProducto: ${session.order.product}`;
-
-        axios.post(`https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/messages`, {
-            messaging_product: "whatsapp",
-            to: ADMIN_NUMBER,
-            text: { body: pedidoMensaje }
-        }, {
-            headers: {
-                'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        // Limpiar sesión del usuario
-        delete userSessions[user];
+https://TU_LINK_DEL_PDF`);
     }
-}
 
-// ----------------- Funciones de envío -----------------
-function sendMenu(to) {
-    const data = {
-        messaging_product: "whatsapp",
-        to: to,
-        text: {
-            body: `🍖 Bienvenido a La Charlietería\n\n1️⃣ Ver menú\n2️⃣ Ver catálogo (PDF)\n3️⃣ Hacer pedido\n4️⃣ Hablar con asesor`
-        }
-    };
+    if(msg === "3"){
+        client.sendMessage(message.from,
+`📝 Para tomar tu pedido envíanos:
 
-    axios.post(`https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/messages`, data, {
-        headers: {
-            'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-            'Content-Type': 'application/json'
-        }
-    });
-}
+Nombre:
+Dirección:
+Producto:`);
 
-function sendPdf(to) {
-    const data = {
-        messaging_product: "whatsapp",
-        to: to,
-        type: "document",
-        document: {
-            link: "https://charlieteria-bot.onrender.com/public/catalogo.pdf",
-            filename: "Catalogo_La_Charlieteria.pdf"
-        }
-    };
+        const admin = "573219434866@c.us";
+        client.sendMessage(admin, "📢 Nuevo pedido recibido revisa WhatsApp.");
+    }
 
-    axios.post(`https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/messages`, data, {
-        headers: {
-            'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-            'Content-Type': 'application/json'
-        }
-    });
-}
+    if(msg === "4"){
+        client.sendMessage(message.from,
+`👨‍💼 Un asesor te responderá pronto.`);
+    }
 
-function sendText(to, message) {
-    const data = {
-        messaging_product: "whatsapp",
-        to: to,
-        text: { body: message }
-    };
+});
 
-    axios.post(`https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/messages`, data, {
-        headers: {
-            'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-            'Content-Type': 'application/json'
-        }
-    });
-}
-
-// ----------------- LEVANTAR SERVIDOR -----------------
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor activo en puerto ${PORT}`));
+client.initialize();
